@@ -868,7 +868,7 @@ SWITCH_STANDARD_API(pip_status_api)
    const char *uuid;
    int count = 0;
    
-   stream->write_function(stream, "+OK 真实视频PIP状态 (视频叠加+简洁黑边框):\n");
+   stream->write_function(stream, "+OK 真实视频PIP状态 (视频叠加+黑边框):\n");
    
    if (pip_mutex && pip_sessions) {
        switch_mutex_lock(pip_mutex);
