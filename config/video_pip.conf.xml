@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  FreeSWITCH Video Picture-in-Picture Module Configuration
+  视频画中画模块配置文件
+-->
+<configuration name="video_pip.conf" description="Video Picture-in-Picture Module Configuration">
+  <settings>
+    <!-- 画中画基本设置 -->
+    <param name="pip-width" value="320"/>
+    <param name="pip-height" value="240"/>
+    <param name="pip-x" value="10"/>
+    <param name="pip-y" value="10"/>
+    <param name="pip-opacity" value="0.8"/>
+    
+    <!-- 背景图片设置 -->
+    <param name="background-image" value="/usr/local/freeswitch/images/default_background.jpg"/>
+    <param name="background-opacity" value="0.3"/>
+    <param name="background-blend-mode" value="overlay"/>
+    
+    <!-- 字幕设置 -->
+    <param name="enable-subtitle" value="false"/>
+    <param name="subtitle-text" value="FreeSWITCH Video Call"/>
+    <param name="subtitle-font" value="/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"/>
+    <param name="subtitle-font-size" value="24"/>
+    <param name="subtitle-font-color" value="white"/>
+    <param name="subtitle-x" value="10"/>
+    <param name="subtitle-y" value="10"/>
+    <param name="subtitle-opacity" value="1.0"/>
+    
+    <!-- 视频格式设置 -->
+    <param name="input-format" value="yuv420p"/>
+    <param name="output-format" value="yuv420p"/>
+    
+    <!-- 性能设置 -->
+    <param name="enable-hardware-acceleration" value="false"/>
+    <param name="max-frame-rate" value="30"/>
+    <param name="quality-preset" value="medium"/>
+    
+    <!-- 调试设置 -->
+    <param name="debug-mode" value="false"/>
+    <param name="log-level" value="info"/>
+    <param name="save-debug-frames" value="false"/>
+    <param name="debug-output-path" value="/tmp/freeswitch_video_debug/"/>
+  </settings>
+  
+  <!-- 预设配置 -->
+  <presets>
+    <preset name="mobile">
+      <param name="pip-width" value="240"/>
+      <param name="pip-height" value="180"/>
+      <param name="pip-x" value="10"/>
+      <param name="pip-y" value="10"/>
+      <param name="pip-opacity" value="0.9"/>
+    </preset>
+    
+    <preset name="desktop">
+      <param name="pip-width" value="480"/>
+      <param name="pip-height" value="360"/>
+      <param name="pip-x" value="20"/>
+      <param name="pip-y" value="20"/>
+      <param name="pip-opacity" value="0.8"/>
+    </preset>
+    
+    <preset name="full-overlay">
+      <param name="pip-width" value="640"/>
+      <param name="pip-height" value="480"/>
+      <param name="pip-x" value="0"/>
+      <param name="pip-y" value="0"/>
+      <param name="pip-opacity" value="0.5"/>
+    </preset>
+  </presets>
+  
+  <!-- 自定义滤镜链 -->
+  <filters>
+    <filter name="brightness" args="brightness=0.1"/>
+    <filter name="contrast" args="contrast=1.2"/>
+    <filter name="saturation" args="saturation=1.1"/>
+  </filters>
+</configuration>
