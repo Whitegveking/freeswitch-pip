@@ -149,6 +149,9 @@ static switch_status_t blend_pip_video(pip_session_data_t *pip_data, switch_fram
     }
     
     /* 获取主帧和PIP帧的数据指针 */
+
+    // uint8_t = unsigned char
+    // planes是一个图像平面数据的起始地址，stride是每个平面行步长
     uint8_t *main_y = main_frame->img->planes[SWITCH_PLANE_Y];
     uint8_t *main_u = main_frame->img->planes[SWITCH_PLANE_U];
     uint8_t *main_v = main_frame->img->planes[SWITCH_PLANE_V];
@@ -180,7 +183,7 @@ static switch_status_t blend_pip_video(pip_session_data_t *pip_data, switch_fram
     }
     
     if (pip_dst_w <= 0 || pip_dst_h <= 0) {
-        return SWITCH_STATUS_SUCCESS;
+        return SWITCH_STATUS_FALSE;
     }
     
     /* 简单的最近邻缩放和叠加Y平面 */
@@ -218,7 +221,7 @@ static switch_status_t blend_pip_video(pip_session_data_t *pip_data, switch_fram
         for (int x = 0; x < pip_dst_w_uv; x++) {
             int src_x = (x * pip_src_w_uv) / pip_dst_w_uv;
             if (src_x >= pip_src_w_uv) src_x = pip_src_w_uv - 1;
-            
+            // 叠加主帧
             main_line[x] = pip_line[src_x];
         }
     }
@@ -302,7 +305,7 @@ static switch_status_t process_video_frame(pip_session_data_t *pip_data, switch_
         }
         
         /* 简化边框：只画黑色边框，减少视觉干扰 */
-        int border_thickness = 3;     /* 减少边框厚度到3像素 */
+        int border_thickness = 2;     /* 减少边框厚度到3像素 */
         uint8_t border_color_y = 0;   /* 黑色边框，更加简洁 */
         
         /* 计算安全的边界 */
@@ -350,7 +353,7 @@ static switch_status_t process_video_frame(pip_session_data_t *pip_data, switch_
         }
         
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
-                         "PIP简洁黑边框绘制完成: %dx%d在(%d,%d)\n",
+                         "PIP黑边框绘制完成: %dx%d在(%d,%d)\n",
                          safe_w, safe_h, safe_x, safe_y);
     }
     
