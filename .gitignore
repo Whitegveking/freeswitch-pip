@@ -1,0 +1,54 @@
+# FreeSWITCH Video PIP Module .gitignore
+
+# 构建文件夹
+build/
+build/*
+
+# 输出视频文件
+output_pip_*.mp4
+*.mp4
+
+# 编译产物
+*.o
+*.so
+*.a
+*.la
+*.lo
+
+# 调试文件
+*.gdb
+*.core
+core.*
+
+# 临时文件
+*.tmp
+*.temp
+*~
+.#*
+#*#
+
+# IDE/编辑器相关
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# 日志文件
+*.log
+
+# CMake相关（如果使用CMake）
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile.cmake
+
+# 测试相关
+test_output/
+*_test
+test_*.mp4
+
+# 系统文件
+.directory
+.Trash-*
