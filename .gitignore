@@ -19,6 +19,7 @@ output_pip_*.mp4
 *.gdb
 *.core
 core.*
+*.sh
 
 # 临时文件
 *.tmp
