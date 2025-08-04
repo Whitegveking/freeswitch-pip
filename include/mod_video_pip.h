@@ -1,11 +1,10 @@
 /*
- * Video Picture-in-Picture Module Header
- * 视频画中画模块头文件
+ * FreeSWITCH Video Picture-in-Picture Module (简化版)
+ * 专注于视频捕获、缩放和叠加功能
+ * 适配: FFmpeg 4.4 + FreeSWITCH 1.10.12 + MicroSIP
  */
 
-#ifndef MOD_VIDEO_PIP_H
-#define MOD_VIDEO_PIP_H
-
+#include <switch.h>
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavfilter/avfilter.h>
@@ -15,154 +14,90 @@
 #include <libavutil/imgutils.h>
 #include <libswscale/swscale.h>
 
-/* 模块版本 */
-#define VIDEO_PIP_VERSION "1.0.0"
+/* 模块声明 */
+SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_video_pip_shutdown);
+SWITCH_MODULE_LOAD_FUNCTION(mod_video_pip_load);
+SWITCH_MODULE_DEFINITION(mod_video_pip, mod_video_pip_load, mod_video_pip_shutdown, NULL);
 
-/* 默认画中画参数 */
-#define DEFAULT_PIP_WIDTH 320
-#define DEFAULT_PIP_HEIGHT 240
-#define DEFAULT_PIP_X 10
-#define DEFAULT_PIP_Y 10
-#define DEFAULT_PIP_OPACITY 0.8f
-
-/* 最大路径长度 */
-#define MAX_PATH_LENGTH 1024
-#define MAX_TEXT_LENGTH 512
-
-/* 视频格式定义 */
-typedef enum {
-    VIDEO_FORMAT_YUV420P,
-    VIDEO_FORMAT_RGB24,
-    VIDEO_FORMAT_RGBA
-} video_format_t;
-
-/* 画中画位置枚举 */
-typedef enum {
-    PIP_POSITION_TOP_LEFT,
-    PIP_POSITION_TOP_RIGHT,
-    PIP_POSITION_BOTTOM_LEFT,
-    PIP_POSITION_BOTTOM_RIGHT,
-    PIP_POSITION_CUSTOM
-} pip_position_t;
-
-/* 字幕样式结构 */
-typedef struct {
-    char *font_family;
-    int font_size;
-    char *font_color;
-    int x;
-    int y;
-    float opacity;
-} subtitle_style_t;
-
-/* 背景图片配置 */
-typedef struct {
-    char *image_path;
-    float opacity;
-    int blend_mode;
-} background_config_t;
-
-/* 扩展的配置结构 */
-typedef struct {
-    char *background_image;
-    char *subtitle_font;
+/* 简化的画中画会话数据 */
+typedef struct pip_session_data {
+    switch_core_session_t *session;
+    switch_channel_t *channel;
+    
+    /* 视频参数 */
+    int main_width;
+    int main_height;
     int pip_width;
     int pip_height;
     int pip_x;
     int pip_y;
     float pip_opacity;
-    int enable_subtitle;
-    char *subtitle_text;
-    subtitle_style_t subtitle_style;
-    background_config_t background;
-    pip_position_t position;
-    video_format_t input_format;
-    video_format_t output_format;
-} pip_config_t;
+    
+    /* 远程视频参数（动态检测） */
+    int remote_width;
+    int remote_height;
+    
+    /* FFmpeg处理上下文 */
+    struct SwsContext *sws_ctx_pip;    /* 用于缩放PIP视频 */
+    AVFrame *frame_main;               /* 本地视频帧（从mp4文件读取） */
+    AVFrame *frame_pip;                /* 远程视频帧 */
+    AVFrame *frame_pip_scaled;         /* 缩放后的远程视频帧 */
+    AVFrame *frame_output;             /* 输出帧 */
+    
+    /* 本地视频文件处理 */
+    AVFormatContext *local_fmt_ctx;    /* 本地MP4文件格式上下文 */
+    AVCodecContext *local_codec_ctx;   /* 本地视频解码器 */
+    int local_video_stream_index;      /* 本地视频流索引 */
+    AVPacket *local_packet;            /* 本地视频包 */
+    
+    /* 输出视频文件处理 */
+    AVFormatContext *output_fmt_ctx;   /* 输出文件格式上下文 */
+    AVCodecContext *output_codec_ctx;  /* 输出视频编码器 */
+    AVStream *output_stream;           /* 输出视频流 */
+    AVPacket *output_packet;           /* 输出视频包 */
+    char output_filename[256];         /* 输出文件名 */
+    
+    /* 媒体钩子 */
+    switch_media_bug_t *read_bug;      /* 读取远程视频 */
+    
+    /* 帧缓存 */
+    switch_frame_t *last_remote_frame; /* 最新的远程视频帧 */
+    switch_mutex_t *frame_mutex;       /* 帧访问互斥锁 */
+    
+    /* 线程安全 */
+    switch_mutex_t *mutex;
+    switch_bool_t active;
+    
+    /* 统计 */
+    uint64_t frames_processed;
+    uint64_t remote_frames_count;
+    uint64_t local_frames_count;
+} pip_session_data_t;
 
-/* 视频帧缓冲区 */
-typedef struct {
-    uint8_t *data[4];
-    int linesize[4];
-    int width;
-    int height;
-    int64_t pts;
-    video_format_t format;
-} video_frame_buffer_t;
+/* 全局变量 */
+static switch_memory_pool_t *module_pool = NULL;
+static switch_mutex_t *module_mutex = NULL;
+static switch_hash_t *session_pip_map = NULL;
 
-/* 滤镜链节点 */
-typedef struct filter_node {
-    char *filter_name;
-    char *filter_args;
-    struct filter_node *next;
-} filter_node_t;
-
-/* 扩展的视频处理上下文 */
-typedef struct {
-    AVFilterContext *buffersrc_ctx;
-    AVFilterContext *buffersink_ctx;
-    AVFilterContext *pip_buffersrc_ctx;
-    AVFilterGraph *filter_graph;
-    AVFrame *frame_in;
-    AVFrame *frame_out;
-    AVFrame *local_frame;
-    AVFrame *remote_frame;
-    AVFrame *background_frame;
-    struct SwsContext *sws_ctx;
-    pip_config_t config;
-    void *mutex;  /* switch_mutex_t 的占位符 */
-    void *pool;   /* switch_memory_pool_t 的占位符 */
-    filter_node_t *custom_filters;
-    int initialized;
-    int frame_count;
-    int64_t start_time;
-} video_pip_context_t;
+/* 默认参数 */
+#define DEFAULT_PIP_WIDTH  320
+#define DEFAULT_PIP_HEIGHT 240
+#define DEFAULT_PIP_X      10
+#define DEFAULT_PIP_Y      10
+#define DEFAULT_PIP_OPACITY 0.8f
 
 /* 函数声明 */
-
-/* 初始化函数 */
-int video_pip_init(void);
-void video_pip_cleanup(void);
-
-/* 上下文管理 */
-video_pip_context_t* video_pip_create_context(void *pool);
-void video_pip_destroy_context(video_pip_context_t *ctx);
-
-/* 配置管理 */
-int video_pip_load_config(pip_config_t *config, const char *config_file);
-int video_pip_save_config(const pip_config_t *config, const char *config_file);
-void video_pip_set_default_config(pip_config_t *config);
-
-/* 滤镜管理 */
-int video_pip_init_filter_graph(video_pip_context_t *ctx, int width, int height);
-int video_pip_add_custom_filter(video_pip_context_t *ctx, const char *filter_name, const char *filter_args);
-void video_pip_clear_custom_filters(video_pip_context_t *ctx);
-
-/* 视频处理 */
-int video_pip_process_frame(video_pip_context_t *ctx, 
-                           video_frame_buffer_t *local_frame,
-                           video_frame_buffer_t *remote_frame,
-                           video_frame_buffer_t *output_frame);
-
-/* 背景处理 */
-int video_pip_load_background_image(video_pip_context_t *ctx, const char *image_path);
-int video_pip_set_background_opacity(video_pip_context_t *ctx, float opacity);
-
-/* 字幕处理 */
-int video_pip_add_subtitle(video_pip_context_t *ctx, const char *text, const subtitle_style_t *style);
-int video_pip_update_subtitle(video_pip_context_t *ctx, const char *text);
-void video_pip_clear_subtitle(video_pip_context_t *ctx);
-
-/* 工具函数 */
-int video_pip_convert_frame_format(const video_frame_buffer_t *src, 
-                                  video_frame_buffer_t *dst, 
-                                  video_format_t target_format);
-int video_pip_scale_frame(const video_frame_buffer_t *src, 
-                         video_frame_buffer_t *dst, 
-                         int target_width, int target_height);
-
-/* 调试和日志 */
-void video_pip_log_config(const pip_config_t *config);
-void video_pip_log_context_info(const video_pip_context_t *ctx);
-
-#endif /* MOD_VIDEO_PIP_H */
+static switch_status_t read_local_video_frame(pip_session_data_t *pip_data);
+static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const char *video_file);
+static switch_status_t init_output_video_file(pip_session_data_t *pip_data, const char *output_file);
+static switch_status_t write_output_frame(pip_session_data_t *pip_data);
+static switch_status_t process_pip_overlay(pip_session_data_t *pip_data);
+static switch_status_t convert_and_overlay_frames(pip_session_data_t *pip_data);
+static switch_status_t init_pip_context(pip_session_data_t *pip_data, const char *local_video_file);
+static void overlay_yuv420p_frames(AVFrame *main_frame, AVFrame *pip_frame_scaled, 
+                                   AVFrame *output_frame, int x, int y, float opacity);
+static switch_status_t process_video_frame(pip_session_data_t *pip_data, 
+                                         switch_frame_t *main_frame, 
+                                         switch_frame_t *pip_frame);
+static void cleanup_pip_session(pip_session_data_t *pip_data);
+static switch_bool_t pip_read_video_callback(switch_media_bug_t *bug, void *user_data, switch_abc_type_t type);
