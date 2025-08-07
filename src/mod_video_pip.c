@@ -371,10 +371,7 @@ static switch_bool_t pip_read_video_callback(switch_media_bug_t *bug, void *user
                 pip_data->remote_frames_count++;
 
                 /* 处理画中画叠加 */
-                if (process_pip_overlay(pip_data) == SWITCH_STATUS_SUCCESS)
-                {
-                    pip_data->frames_processed++;
-                }
+                process_pip_overlay(pip_data);
             }
 
             switch_mutex_unlock(pip_data->frame_mutex);
