@@ -25,12 +25,12 @@ static switch_status_t read_local_video_frame(pip_session_data_t *pip_data)
                 av_packet_unref(pip_data->local_packet);
                 continue;
             }
-            
+
             // 从解码器接收视频帧
             ret = avcodec_receive_frame(pip_data->local_codec_ctx, pip_data->frame_main);
             // 视频包处理完成后释放
             av_packet_unref(pip_data->local_packet);
-            
+
             // 获取了一个完整的视频帧，函数的任务完成
             if (ret >= 0)
             {
@@ -78,6 +78,7 @@ static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const
     }
 
     /* 查找视频流 */
+    // 遍历所有流，找到第一个视频流
     pip_data->local_video_stream_index = -1;
     for (unsigned int i = 0; i < pip_data->local_fmt_ctx->nb_streams; i++)
     {
@@ -88,6 +89,7 @@ static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const
         }
     }
 
+    // 未找到视频流
     if (pip_data->local_video_stream_index == -1)
     {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "未找到视频流\n");
@@ -95,6 +97,7 @@ static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const
     }
 
     /* 获取解码器 */
+    // 根据流的编解码参数查找对应的解码器
     codec =
         avcodec_find_decoder(pip_data->local_fmt_ctx->streams[pip_data->local_video_stream_index]->codecpar->codec_id);
     if (!codec)
@@ -104,6 +107,7 @@ static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const
     }
 
     /* 分配解码器上下文 */
+    // 通过找到的解码器创建解码器上下文，类似于C++中的类实例化
     pip_data->local_codec_ctx = avcodec_alloc_context3(codec);
     if (!pip_data->local_codec_ctx)
     {
@@ -112,6 +116,7 @@ static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const
     }
 
     /* 复制编解码参数 */
+    // 将流的编解码参数复制到解码器上下文中
     ret = avcodec_parameters_to_context(pip_data->local_codec_ctx,
                                         pip_data->local_fmt_ctx->streams[pip_data->local_video_stream_index]->codecpar);
     if (ret < 0)
@@ -202,8 +207,10 @@ static switch_status_t init_output_video_file(pip_session_data_t *pip_data, cons
     }
 
     /* 如果是MP4格式，需要全局头 */
+    // 判断是否需要全局头
     if (pip_data->output_fmt_ctx->oformat->flags & AVFMT_GLOBALHEADER)
     {
+        // 设置编码器标志以包含全局头
         pip_data->output_codec_ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
 
@@ -226,6 +233,8 @@ static switch_status_t init_output_video_file(pip_session_data_t *pip_data, cons
     pip_data->output_stream->time_base = pip_data->output_codec_ctx->time_base;
 
     /* 打开输出文件 */
+    // 我们准备使用的输出格式，是不是那种不需要物理文件的特殊格式？
+    // mp4格式通常需要物理文件，所以我们需要打开文件进行写入
     if (!(pip_data->output_fmt_ctx->oformat->flags & AVFMT_NOFILE))
     {
         ret = avio_open(&pip_data->output_fmt_ctx->pb, output_file, AVIO_FLAG_WRITE);
@@ -328,9 +337,11 @@ static switch_bool_t pip_read_video_callback(switch_media_bug_t *bug, void *user
         break;
 
     case SWITCH_ABC_TYPE_READ_VIDEO_PING:
+        // 从媒体钩子中获取视频帧
         frame = switch_core_media_bug_get_video_ping_frame(bug);
         if (frame && frame->img && pip_data->active)
         {
+            // 锁定互斥锁，确保线程安全
             switch_mutex_lock(pip_data->frame_mutex);
 
             /* 保存最新的远程视频帧 */
@@ -338,13 +349,16 @@ static switch_bool_t pip_read_video_callback(switch_media_bug_t *bug, void *user
             {
                 if (pip_data->last_remote_frame->img)
                 {
+                    // 释放之前的图像数据，防止内存泄漏
                     switch_img_free(&pip_data->last_remote_frame->img);
                 }
             }
             else
             {
+                // 如果没有分配过last_remote_frame，分配内存
                 pip_data->last_remote_frame =
                     switch_core_alloc(switch_core_session_get_pool(pip_data->session), sizeof(switch_frame_t));
+                // 初始化内存
                 memset(pip_data->last_remote_frame, 0, sizeof(switch_frame_t));
             }
 
@@ -442,8 +456,8 @@ static switch_status_t convert_and_overlay_frames(pip_session_data_t *pip_data)
         pip_data->remote_height = remote_img->d_h;
 
         pip_data->sws_ctx_pip =
-            sws_getContext(pip_data->remote_width, pip_data->remote_height, AV_PIX_FMT_YUV420P, pip_data->pip_width,
-                           pip_data->pip_height, AV_PIX_FMT_YUV420P, SWS_BILINEAR, NULL, NULL, NULL);
+            sws_getContext(pip_data->remote_width, pip_data->remote_height, AV_PIX_FMT_YUV420P,
+                           pip_data->pip_width, pip_data->pip_height, AV_PIX_FMT_YUV420P, SWS_BILINEAR, NULL, NULL, NULL);
 
         if (!pip_data->sws_ctx_pip)
         {
@@ -619,6 +633,7 @@ static void overlay_yuv420p_frames(AVFrame *main_frame, AVFrame *pip_frame_scale
 
         for (int j = 0; j < pip_width_uv; j++)
         {
+            // Alpha混合算法
             main_u[j] = (uint8_t)(main_u[j] * (1.0f - opacity) + pip_u[j] * opacity);
         }
     }
