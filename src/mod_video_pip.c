@@ -705,6 +705,7 @@ static switch_status_t process_video_frame(pip_session_data_t *pip_data, switch_
 
     if (frame_size > 0 && frame_size <= main_frame->buflen)
     {
+        // (const uint8_t *const *)  常量指针+指针常量的组合，表示指向常量数据的指针的指针
         av_image_copy_to_buffer((uint8_t *)main_frame->data, frame_size,
                                 (const uint8_t *const *)pip_data->frame_output->data, pip_data->frame_output->linesize,
                                 AV_PIX_FMT_YUV420P, pip_data->main_width, pip_data->main_height, 1);
