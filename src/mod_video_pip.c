@@ -735,23 +735,26 @@ static void cleanup_pip_session(pip_session_data_t *pip_data)
     /* 清理媒体钩子 */
     if (pip_data->read_bug)
     {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "移除媒体钩子\n");
         switch_core_media_bug_remove(pip_data->session, &pip_data->read_bug);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "已移除媒体钩子\n");
         pip_data->read_bug = NULL;
     }
 
     /* 清理本地视频文件资源 */
+    // 清理视频包
     if (pip_data->local_packet)
     {
         av_packet_free(&pip_data->local_packet);
         pip_data->local_packet = NULL;
     }
+    // 关闭解码器上下文
     if (pip_data->local_codec_ctx)
     {
         avcodec_close(pip_data->local_codec_ctx);
         avcodec_free_context(&pip_data->local_codec_ctx);
         pip_data->local_codec_ctx = NULL;
     }
+    // 关闭输入格式上下文
     if (pip_data->local_fmt_ctx)
     {
         avformat_close_input(&pip_data->local_fmt_ctx);
@@ -762,7 +765,9 @@ static void cleanup_pip_session(pip_session_data_t *pip_data)
     if (pip_data->output_codec_ctx)
     {
         /* 刷新编码器 */
+        // 让编码器处理所有剩余的帧
         avcodec_send_frame(pip_data->output_codec_ctx, NULL);
+        // 用来接收剩余帧编码后的数据包
         AVPacket *pkt = av_packet_alloc();
         while (avcodec_receive_packet(pip_data->output_codec_ctx, pkt) >= 0)
         {
