@@ -860,6 +860,7 @@ SWITCH_STANDARD_API(video_pip_start_function)
         char *cmd_copy = strdup(cmd);
         char *argv[2];
         int argc = 0;
+        // 用空格分割字符串为uuid 和文件路径
         char *token = strtok(cmd_copy, " ");
         while (token != NULL && argc < 2)
         {
@@ -924,6 +925,7 @@ SWITCH_STANDARD_API(video_pip_start_function)
     }
 
     /* 查找会话 */
+    // 使用UUID查找会话,并且会上锁
     psession = switch_core_session_locate(uuid);
     if (!psession)
     {
@@ -969,6 +971,7 @@ SWITCH_STANDARD_API(video_pip_start_function)
     }
 
     /* 创建媒体钩子来捕获远程视频 */
+    // 第四个参数是一个回调函数指针，指向处理远程视频帧的函数
     if (switch_core_media_bug_add(psession, "video_pip_read", uuid, pip_read_video_callback, pip_data, 0,
                                   SMBF_READ_VIDEO_PING, &pip_data->read_bug) != SWITCH_STATUS_SUCCESS)
     {
