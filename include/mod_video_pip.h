@@ -59,6 +59,11 @@ typedef struct pip_session_data
     int local_video_stream_index;    /* 本地视频流索引 */
     AVPacket *local_packet;          /* 本地视频包 */
 
+    /* 本地图片处理 */
+    AVFrame *local_image_frame;   /* 本地图片帧 */
+    switch_bool_t use_image_mode; /* 是否使用图片模式而非视频模式 */
+    char local_image_path[512];   /* 本地图片路径 */
+
     /* 输出视频文件处理 */
     AVFormatContext *output_fmt_ctx;  /* 输出文件格式上下文 */
     AVCodecContext *output_codec_ctx; /* 输出视频编码器 */
@@ -105,6 +110,7 @@ static switch_hash_t *session_pip_map = NULL;
 
 /* 函数声明 */
 static switch_status_t read_local_video_frame(pip_session_data_t *pip_data);
+static switch_status_t load_local_image(pip_session_data_t *pip_data, const char *image_file);
 static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const char *video_file);
 static switch_status_t init_output_video_file(pip_session_data_t *pip_data, const char *output_file);
 static switch_status_t write_output_frame(pip_session_data_t *pip_data);

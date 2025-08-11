@@ -71,6 +71,219 @@ static switch_status_t read_local_video_frame(pip_session_data_t *pip_data)
 
     retry_count = 0;
     return SWITCH_STATUS_FALSE;
+}
+
+/* 加载本地图片文件 */
+static switch_status_t load_local_image(pip_session_data_t *pip_data, const char *image_file)
+{
+    AVFormatContext *fmt_ctx = NULL;
+    AVCodecContext *codec_ctx = NULL;
+    AVCodec *codec = NULL;
+    AVPacket *packet = NULL;
+    int video_stream_index = -1;
+    int ret;
+
+    if (!pip_data || !image_file)
+    {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无效的参数\n");
+        return SWITCH_STATUS_FALSE;
+    }
+
+    /* 检查文件是否存在 */
+    if (access(image_file, R_OK) != 0)
+    {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法访问图片文件: %s\n", image_file);
+        return SWITCH_STATUS_FALSE;
+    }
+
+    /* 保存图片路径 */
+    switch_copy_string(pip_data->local_image_path, image_file, sizeof(pip_data->local_image_path));
+
+    /* 打开图片文件 */
+    ret = avformat_open_input(&fmt_ctx, image_file, NULL, NULL);
+    if (ret < 0)
+    {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法打开图片文件: %s (错误码: %d)\n", image_file, ret);
+        return SWITCH_STATUS_FALSE;
+    }
+
+    /* 获取流信息 */
+    ret = avformat_find_stream_info(fmt_ctx, NULL);
+    if (ret < 0)
+    {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法获取流信息 (错误码: %d)\n", ret);
+        avformat_close_input(&fmt_ctx);
+        return SWITCH_STATUS_FALSE;
+    }
+
+    /* 查找视频流（图片在FFmpeg中作为单帧视频处理） */
+    for (int i = 0; i < fmt_ctx->nb_streams; i++)
+    {
+        if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+        {
+            video_stream_index = i;
+            break;
+        }
+    }
+
+    if (video_stream_index == -1)
+    {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "在图片文件中未找到视频流\n");
+        avformat_close_input(&fmt_ctx);
+        return SWITCH_STATUS_FALSE;
+    }
+
+    /* 获取解码器 */
+    codec = avcodec_find_decoder(fmt_ctx->streams[video_stream_index]->codecpar->codec_id);
+    if (!codec)
+    {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "未找到图片解码器\n");
+        avformat_close_input(&fmt_ctx);
+        return SWITCH_STATUS_FALSE;
+    }
+
+    /* 创建解码器上下文 */
+    codec_ctx = avcodec_alloc_context3(codec);
+    if (!codec_ctx)
+    {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法分配解码器上下文\n");
+        avformat_close_input(&fmt_ctx);
+        return SWITCH_STATUS_FALSE;
+    }
+
+    /* 复制解码器参数 */
+    ret = avcodec_parameters_to_context(codec_ctx, fmt_ctx->streams[video_stream_index]->codecpar);
+    if (ret < 0)
+    {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法复制解码器参数\n");
+        avcodec_free_context(&codec_ctx);
+        avformat_close_input(&fmt_ctx);
+        return SWITCH_STATUS_FALSE;
+    }
+
+    /* 打开解码器 */
+    ret = avcodec_open2(codec_ctx, codec, NULL);
+    if (ret < 0)
+    {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法打开解码器\n");
+        avcodec_free_context(&codec_ctx);
+        avformat_close_input(&fmt_ctx);
+        return SWITCH_STATUS_FALSE;
+    }
+
+    /* 分配帧和包 */
+    pip_data->local_image_frame = av_frame_alloc();
+    packet = av_packet_alloc();
+    if (!pip_data->local_image_frame || !packet)
+    {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法分配帧或包\n");
+        if (pip_data->local_image_frame)
+            av_frame_free(&pip_data->local_image_frame);
+        if (packet)
+            av_packet_free(&packet);
+        avcodec_free_context(&codec_ctx);
+        avformat_close_input(&fmt_ctx);
+        return SWITCH_STATUS_FALSE;
+    }
+
+    /* 读取并解码第一帧（图片） */
+    ret = av_read_frame(fmt_ctx, packet);
+    if (ret >= 0 && packet->stream_index == video_stream_index)
+    {
+        ret = avcodec_send_packet(codec_ctx, packet);
+        if (ret >= 0)
+        {
+            ret = avcodec_receive_frame(codec_ctx, pip_data->local_image_frame);
+        }
+    }
+
+    /* 清理临时资源 */
+    av_packet_free(&packet);
+    avcodec_free_context(&codec_ctx);
+    avformat_close_input(&fmt_ctx);
+
+    if (ret < 0)
+    {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法解码图片帧\n");
+        av_frame_free(&pip_data->local_image_frame);
+        return SWITCH_STATUS_FALSE;
+    }
+
+    /* 检查图片格式并转换为YUV420P */
+    if (pip_data->local_image_frame->format != AV_PIX_FMT_YUV420P)
+    {
+        AVFrame *yuv_frame = av_frame_alloc();
+        struct SwsContext *sws_ctx = NULL;
+
+        if (!yuv_frame)
+        {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法分配YUV帧\n");
+            av_frame_free(&pip_data->local_image_frame);
+            return SWITCH_STATUS_FALSE;
+        }
+
+        /* 设置YUV帧参数 */
+        yuv_frame->format = AV_PIX_FMT_YUV420P;
+        yuv_frame->width = pip_data->local_image_frame->width;
+        yuv_frame->height = pip_data->local_image_frame->height;
+
+        if (av_frame_get_buffer(yuv_frame, 32) < 0)
+        {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法分配YUV帧缓冲区\n");
+            av_frame_free(&yuv_frame);
+            av_frame_free(&pip_data->local_image_frame);
+            return SWITCH_STATUS_FALSE;
+        }
+
+        /* 创建格式转换上下文 */
+        sws_ctx = sws_getContext(
+            pip_data->local_image_frame->width, pip_data->local_image_frame->height, pip_data->local_image_frame->format,
+            yuv_frame->width, yuv_frame->height, AV_PIX_FMT_YUV420P,
+            SWS_BILINEAR, NULL, NULL, NULL);
+
+        if (!sws_ctx)
+        {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法创建图片格式转换上下文\n");
+            av_frame_free(&yuv_frame);
+            av_frame_free(&pip_data->local_image_frame);
+            return SWITCH_STATUS_FALSE;
+        }
+
+        /* 执行格式转换 */
+        int scale_ret = sws_scale(sws_ctx,
+                                  (const uint8_t *const *)pip_data->local_image_frame->data,
+                                  pip_data->local_image_frame->linesize,
+                                  0, pip_data->local_image_frame->height,
+                                  yuv_frame->data, yuv_frame->linesize);
+
+        sws_freeContext(sws_ctx);
+
+        if (scale_ret < 0)
+        {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "图片格式转换失败\n");
+            av_frame_free(&yuv_frame);
+            av_frame_free(&pip_data->local_image_frame);
+            return SWITCH_STATUS_FALSE;
+        }
+
+        /* 替换原始帧为转换后的YUV帧 */
+        av_frame_free(&pip_data->local_image_frame);
+        pip_data->local_image_frame = yuv_frame;
+
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "图片已转换为YUV420P格式\n");
+    }
+
+    /* 设置图片模式标志 */
+    pip_data->use_image_mode = SWITCH_TRUE;
+    pip_data->main_width = pip_data->local_image_frame->width;
+    pip_data->main_height = pip_data->local_image_frame->height;
+
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
+                      "成功加载图片: %s (%dx%d, 格式: %s -> YUV420P)\n",
+                      image_file, pip_data->main_width, pip_data->main_height,
+                      av_get_pix_fmt_name(pip_data->local_image_frame->format));
+
+    return SWITCH_STATUS_SUCCESS;
 } /* 初始化本地视频文件 */
 static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const char *video_file)
 {
@@ -511,30 +724,60 @@ static switch_status_t process_pip_overlay(pip_session_data_t *pip_data)
         return SWITCH_STATUS_FALSE;
     }
 
-    /* 简化的帧率同步策略：基于帧计数比例 */
-
-    /* 计算应该读取的本地视频帧数 */
-    uint64_t expected_local_frames = (pip_data->remote_frames_count * pip_data->local_fps) / pip_data->target_fps;
-
-    /* 如果本地帧数不足，读取更多帧 */
-    while (pip_data->local_frames_count < expected_local_frames)
+    /* 检查是否使用图片模式 */
+    if (pip_data->use_image_mode)
     {
-        if (read_local_video_frame(pip_data) != SWITCH_STATUS_SUCCESS)
+        /* 图片模式：使用固定的本地图片，不需要读取新帧 */
+        if (!pip_data->local_image_frame)
         {
-            /* 如果读取失败，可能到了文件末尾，停止处理 */
-            break;
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "图片模式下本地图片帧为空\n");
+            return SWITCH_STATUS_FALSE;
+        }
+
+        /* 将图片帧复制到frame_main用于处理 */
+        if (!pip_data->frame_main)
+        {
+            pip_data->frame_main = av_frame_alloc();
+            if (!pip_data->frame_main)
+            {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法分配主帧\n");
+                return SWITCH_STATUS_FALSE;
+            }
+        }
+
+        /* 复制图片帧数据到主帧 */
+        av_frame_unref(pip_data->frame_main);
+        if (av_frame_ref(pip_data->frame_main, pip_data->local_image_frame) < 0)
+        {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法复制图片帧\n");
+            return SWITCH_STATUS_FALSE;
         }
     }
+    else
+    {
+        /* 视频模式：使用原有的帧率同步策略 */
+        uint64_t expected_local_frames = (pip_data->remote_frames_count * pip_data->local_fps) / pip_data->target_fps;
 
-    /* 记录同步信息 */
-    if (pip_data->remote_frames_count % 300 == 0)
-    { /* 每10秒记录一次 */
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
-                          "帧率同步: 远程帧=%llu, 本地帧=%llu, 期望本地帧=%llu, 本地fps=%.2f, 目标fps=%.2f\n",
-                          (unsigned long long)pip_data->remote_frames_count,
-                          (unsigned long long)pip_data->local_frames_count,
-                          (unsigned long long)expected_local_frames,
-                          pip_data->local_fps, pip_data->target_fps);
+        /* 如果本地帧数不足，读取更多帧 */
+        while (pip_data->local_frames_count < expected_local_frames)
+        {
+            if (read_local_video_frame(pip_data) != SWITCH_STATUS_SUCCESS)
+            {
+                /* 如果读取失败，可能到了文件末尾，停止处理 */
+                break;
+            }
+        }
+
+        /* 记录同步信息 */
+        if (pip_data->remote_frames_count % 300 == 0)
+        { /* 每10秒记录一次 */
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
+                              "帧率同步: 远程帧=%llu, 本地帧=%llu, 期望本地帧=%llu, 本地fps=%.2f, 目标fps=%.2f\n",
+                              (unsigned long long)pip_data->remote_frames_count,
+                              (unsigned long long)pip_data->local_frames_count,
+                              (unsigned long long)expected_local_frames,
+                              pip_data->local_fps, pip_data->target_fps);
+        }
     }
 
     /* 确保有远程视频帧 */
@@ -642,11 +885,46 @@ static switch_status_t init_pip_context(pip_session_data_t *pip_data, const char
     char output_file[512];
     time_t now = time(NULL);
     struct tm *tm_now = localtime(&now);
+    const char *file_ext;
 
-    /* 首先初始化本地视频文件 */
-    if (init_local_video_file(pip_data, local_video_file) != SWITCH_STATUS_SUCCESS)
+    /* 检查文件扩展名以确定是图片还是视频 */
+    file_ext = strrchr(local_video_file, '.');
+    pip_data->use_image_mode = SWITCH_FALSE;
+
+    if (file_ext)
     {
-        return SWITCH_STATUS_FALSE;
+        /* 检查是否为常见的图片格式 */
+        if (strcasecmp(file_ext, ".jpg") == 0 || strcasecmp(file_ext, ".jpeg") == 0 ||
+            strcasecmp(file_ext, ".png") == 0 || strcasecmp(file_ext, ".bmp") == 0 ||
+            strcasecmp(file_ext, ".gif") == 0 || strcasecmp(file_ext, ".tiff") == 0)
+        {
+            /* 图片模式：加载静态图片 */
+            if (load_local_image(pip_data, local_video_file) != SWITCH_STATUS_SUCCESS)
+            {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "加载本地图片失败: %s\n", local_video_file);
+                return SWITCH_STATUS_FALSE;
+            }
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "使用图片模式: %s\n", local_video_file);
+        }
+        else
+        {
+            /* 视频模式：加载视频文件 */
+            if (init_local_video_file(pip_data, local_video_file) != SWITCH_STATUS_SUCCESS)
+            {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "初始化本地视频失败: %s\n", local_video_file);
+                return SWITCH_STATUS_FALSE;
+            }
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "使用视频模式: %s\n", local_video_file);
+        }
+    }
+    else
+    {
+        /* 无扩展名，默认尝试视频模式 */
+        if (init_local_video_file(pip_data, local_video_file) != SWITCH_STATUS_SUCCESS)
+        {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "初始化本地文件失败: %s\n", local_video_file);
+            return SWITCH_STATUS_FALSE;
+        }
     }
 
     /* 生成输出文件名 */
@@ -966,6 +1244,13 @@ static void cleanup_pip_session(pip_session_data_t *pip_data)
         pip_data->frame_output = NULL;
     }
 
+    /* 清理本地图片帧 */
+    if (pip_data->local_image_frame)
+    {
+        av_frame_free(&pip_data->local_image_frame);
+        pip_data->local_image_frame = NULL;
+    }
+
     /* 清理远程视频帧 */
     if (pip_data->last_remote_frame && pip_data->last_remote_frame->img)
     {
@@ -1024,7 +1309,7 @@ SWITCH_STANDARD_API(video_pip_start_function)
     /* 如果没有提供本地视频文件，使用默认路径 */
     if (!local_video_file)
     {
-        local_video_file = switch_core_strdup(pool, "/home/white/桌面/freeswitch-video-pip-module/test_videos/dynamic_test_local.mp4");
+        local_video_file = switch_core_strdup(pool, "/home/white/桌面/freeswitch-video-pip-module/test_pictures/test.jpg");
     } /* 检查本地视频文件是否存在 */
     if (access(local_video_file, R_OK) != 0)
     {

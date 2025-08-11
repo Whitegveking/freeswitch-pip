@@ -7,6 +7,7 @@ build/*
 # 输出视频文件
 output_pip_*.mp4
 *.mp4
+*.jpg
 
 # 编译产物
 *.o
@@ -26,6 +27,7 @@ core.*
 *.temp
 *~
 .#*
+*.md
 #*#
 
 # IDE/编辑器相关
@@ -49,6 +51,8 @@ Makefile.cmake
 test_output/
 *_test
 test_*.mp4
+test_videos/
+test_pictures/
 
 # 系统文件
 .directory
