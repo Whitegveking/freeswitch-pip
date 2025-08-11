@@ -1412,6 +1412,8 @@ SWITCH_STANDARD_API(video_pip_start_function)
 
     /* 初始化PIP上下文（包含本地视频文件） */
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "开始初始化PIP上下文\n");
+
+    // 确认本地文件是图片还是视频，并进行相应初始化
     if (init_pip_context(pip_data, local_video_file) != SWITCH_STATUS_SUCCESS)
     {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "初始化PIP上下文失败\n");
