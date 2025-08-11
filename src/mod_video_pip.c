@@ -100,10 +100,10 @@ static switch_status_t load_local_image(pip_session_data_t *pip_data, const char
     switch_copy_string(pip_data->local_image_path, image_file, sizeof(pip_data->local_image_path));
 
     /* 打开图片文件 */
-    ret = avformat_open_input(&fmt_ctx, image_file, NULL, NULL);
+    ret = avformat_open_input(&fmt_ctx, pip_data->local_image_path, NULL, NULL);
     if (ret < 0)
     {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法打开图片文件: %s (错误码: %d)\n", image_file, ret);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法打开图片文件: %s (错误码: %d)\n", pip_data->local_image_path, ret);
         return SWITCH_STATUS_FALSE;
     }
 
@@ -284,7 +284,9 @@ static switch_status_t load_local_image(pip_session_data_t *pip_data, const char
                       av_get_pix_fmt_name(pip_data->local_image_frame->format));
 
     return SWITCH_STATUS_SUCCESS;
-} /* 初始化本地视频文件 */
+}
+
+/* 初始化本地视频文件 */
 static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const char *video_file)
 {
     AVCodec *codec;
