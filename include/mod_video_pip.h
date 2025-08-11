@@ -13,6 +13,8 @@
 #include <libavutil/opt.h>
 #include <libswscale/swscale.h>
 #include <switch.h>
+#include <unistd.h> /* for access() */
+#include <string.h> /* for string functions */
 
 /* 模块声明 */
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_video_pip_shutdown);
@@ -57,6 +59,7 @@ typedef struct pip_session_data
     AVStream *output_stream;          /* 输出视频流 */
     AVPacket *output_packet;          /* 输出视频包 */
     char output_filename[256];        /* 输出文件名 */
+    int64_t output_pts;               /* 输出视频PTS计数器 */
 
     /* 媒体钩子 */
     switch_media_bug_t *read_bug; /* 读取远程视频 */
@@ -73,6 +76,13 @@ typedef struct pip_session_data
     uint64_t frames_processed;
     uint64_t remote_frames_count;
     uint64_t local_frames_count;
+
+    /* 帧率同步 */
+    double local_fps;        /* 本地视频文件的帧率 */
+    double target_fps;       /* 目标输出帧率 */
+    double local_frame_time; /* 本地视频每帧对应的时间间隔 */
+    double current_time;     /* 当前处理的时间位置 */
+    double last_local_time;  /* 上次读取本地帧的时间 */
 } pip_session_data_t;
 
 /* 全局变量 */
@@ -81,10 +91,10 @@ static switch_mutex_t *module_mutex = NULL;
 static switch_hash_t *session_pip_map = NULL;
 
 /* 默认参数 */
-#define DEFAULT_PIP_WIDTH   320
-#define DEFAULT_PIP_HEIGHT  240
-#define DEFAULT_PIP_X       10
-#define DEFAULT_PIP_Y       10
+#define DEFAULT_PIP_WIDTH 320
+#define DEFAULT_PIP_HEIGHT 240
+#define DEFAULT_PIP_X 10
+#define DEFAULT_PIP_Y 10
 #define DEFAULT_PIP_OPACITY 0.8f
 
 /* 函数声明 */
@@ -92,6 +102,7 @@ static switch_status_t read_local_video_frame(pip_session_data_t *pip_data);
 static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const char *video_file);
 static switch_status_t init_output_video_file(pip_session_data_t *pip_data, const char *output_file);
 static switch_status_t write_output_frame(pip_session_data_t *pip_data);
+static switch_status_t flush_encoder(pip_session_data_t *pip_data);
 static switch_status_t process_pip_overlay(pip_session_data_t *pip_data);
 static switch_status_t convert_and_overlay_frames(pip_session_data_t *pip_data);
 static switch_status_t init_pip_context(pip_session_data_t *pip_data, const char *local_video_file);

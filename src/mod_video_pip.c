@@ -4,9 +4,10 @@
 static switch_status_t read_local_video_frame(pip_session_data_t *pip_data)
 {
     int ret;
+    static int retry_count = 0;
 
     // 确保正确初始化，避免空指针访问
-    if (!pip_data->local_fmt_ctx || !pip_data->local_codec_ctx)
+    if (!pip_data || !pip_data->local_fmt_ctx || !pip_data->local_codec_ctx)
     {
         return SWITCH_STATUS_FALSE;
     }
@@ -35,6 +36,7 @@ static switch_status_t read_local_video_frame(pip_session_data_t *pip_data)
             if (ret >= 0)
             {
                 pip_data->local_frames_count++;
+                retry_count = 0; // 重置重试计数
                 return SWITCH_STATUS_SUCCESS;
             }
         }
@@ -48,10 +50,26 @@ static switch_status_t read_local_video_frame(pip_session_data_t *pip_data)
     /* 到达文件末尾，循环播放 */
     if (ret == AVERROR_EOF)
     {
-        av_seek_frame(pip_data->local_fmt_ctx, pip_data->local_video_stream_index, 0, AVSEEK_FLAG_BACKWARD);
+        // 防止无限递归
+        if (retry_count >= 10)
+        {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "视频文件循环播放重试次数过多，停止处理\n");
+            retry_count = 0;
+            return SWITCH_STATUS_FALSE;
+        }
+
+        retry_count++;
+        ret = av_seek_frame(pip_data->local_fmt_ctx, pip_data->local_video_stream_index, 0, AVSEEK_FLAG_BACKWARD);
+        if (ret < 0)
+        {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "视频文件seek失败: %d\n", ret);
+            retry_count = 0;
+            return SWITCH_STATUS_FALSE;
+        }
         return read_local_video_frame(pip_data); /* 递归调用重新开始 */
     }
 
+    retry_count = 0;
     return SWITCH_STATUS_FALSE;
 }
 
@@ -61,11 +79,17 @@ static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const
     AVCodec *codec;
     int ret;
 
+    if (!pip_data || !video_file)
+    {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无效的参数\n");
+        return SWITCH_STATUS_FALSE;
+    }
+
     /* 打开本地视频文件 */
     ret = avformat_open_input(&pip_data->local_fmt_ctx, video_file, NULL, NULL);
     if (ret < 0)
     {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法打开本地视频文件: %s\n", video_file);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法打开本地视频文件: %s (错误码: %d)\n", video_file, ret);
         return SWITCH_STATUS_FALSE;
     }
 
@@ -73,7 +97,8 @@ static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const
     ret = avformat_find_stream_info(pip_data->local_fmt_ctx, NULL);
     if (ret < 0)
     {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法获取流信息\n");
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法获取流信息 (错误码: %d)\n", ret);
+        avformat_close_input(&pip_data->local_fmt_ctx);
         return SWITCH_STATUS_FALSE;
     }
 
@@ -93,6 +118,7 @@ static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const
     if (pip_data->local_video_stream_index == -1)
     {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "未找到视频流\n");
+        avformat_close_input(&pip_data->local_fmt_ctx);
         return SWITCH_STATUS_FALSE;
     }
 
@@ -103,6 +129,7 @@ static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const
     if (!codec)
     {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "未找到解码器\n");
+        avformat_close_input(&pip_data->local_fmt_ctx);
         return SWITCH_STATUS_FALSE;
     }
 
@@ -112,6 +139,7 @@ static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const
     if (!pip_data->local_codec_ctx)
     {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "分配解码器上下文失败\n");
+        avformat_close_input(&pip_data->local_fmt_ctx);
         return SWITCH_STATUS_FALSE;
     }
 
@@ -121,7 +149,9 @@ static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const
                                         pip_data->local_fmt_ctx->streams[pip_data->local_video_stream_index]->codecpar);
     if (ret < 0)
     {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "复制编解码参数失败\n");
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "复制编解码参数失败 (错误码: %d)\n", ret);
+        avcodec_free_context(&pip_data->local_codec_ctx);
+        avformat_close_input(&pip_data->local_fmt_ctx);
         return SWITCH_STATUS_FALSE;
     }
 
@@ -129,7 +159,9 @@ static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const
     ret = avcodec_open2(pip_data->local_codec_ctx, codec, NULL);
     if (ret < 0)
     {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "打开解码器失败\n");
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "打开解码器失败 (错误码: %d)\n", ret);
+        avcodec_free_context(&pip_data->local_codec_ctx);
+        avformat_close_input(&pip_data->local_fmt_ctx);
         return SWITCH_STATUS_FALSE;
     }
 
@@ -138,6 +170,9 @@ static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const
     if (!pip_data->local_packet)
     {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "分配包失败\n");
+        avcodec_close(pip_data->local_codec_ctx);
+        avcodec_free_context(&pip_data->local_codec_ctx);
+        avformat_close_input(&pip_data->local_fmt_ctx);
         return SWITCH_STATUS_FALSE;
     }
 
@@ -145,8 +180,25 @@ static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const
     pip_data->main_width = pip_data->local_codec_ctx->width;
     pip_data->main_height = pip_data->local_codec_ctx->height;
 
-    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "本地视频文件初始化成功: %s (%dx%d)\n", video_file,
-                      pip_data->main_width, pip_data->main_height);
+    /* 获取本地视频帧率 */
+    AVStream *video_stream = pip_data->local_fmt_ctx->streams[pip_data->local_video_stream_index];
+    if (video_stream->r_frame_rate.num > 0 && video_stream->r_frame_rate.den > 0)
+    {
+        pip_data->local_fps = (double)video_stream->r_frame_rate.num / video_stream->r_frame_rate.den;
+    }
+    else if (video_stream->avg_frame_rate.num > 0 && video_stream->avg_frame_rate.den > 0)
+    {
+        pip_data->local_fps = (double)video_stream->avg_frame_rate.num / video_stream->avg_frame_rate.den;
+    }
+    else
+    {
+        pip_data->local_fps = 30.0; // 默认帧率
+    }
+
+    pip_data->local_frame_time = 1.0 / pip_data->local_fps;
+
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "本地视频文件初始化成功: %s (%dx%d, %.2f fps)\n", video_file,
+                      pip_data->main_width, pip_data->main_height, pip_data->local_fps);
 
     return SWITCH_STATUS_SUCCESS;
 }
@@ -230,7 +282,9 @@ static switch_status_t init_output_video_file(pip_session_data_t *pip_data, cons
         return SWITCH_STATUS_FALSE;
     }
 
+    /* 设置流的时间基 - 确保时间戳从0开始 */
     pip_data->output_stream->time_base = pip_data->output_codec_ctx->time_base;
+    pip_data->output_stream->start_time = 0;
 
     /* 打开输出文件 */
     // 我们准备使用的输出格式，是不是那种不需要物理文件的特殊格式？
@@ -273,15 +327,14 @@ static switch_status_t init_output_video_file(pip_session_data_t *pip_data, cons
 static switch_status_t write_output_frame(pip_session_data_t *pip_data)
 {
     int ret;
-    static int64_t pts = 0;
 
     if (!pip_data->output_codec_ctx || !pip_data->frame_output)
     {
         return SWITCH_STATUS_FALSE;
     }
 
-    /* 设置帧时间戳 */
-    pip_data->frame_output->pts = pts++;
+    /* 设置帧时间戳 - 使用会话专用的PTS计数器 */
+    pip_data->frame_output->pts = pip_data->output_pts++;
 
     /* 发送帧到编码器 */
     ret = avcodec_send_frame(pip_data->output_codec_ctx, pip_data->frame_output);
@@ -318,6 +371,56 @@ static switch_status_t write_output_frame(pip_session_data_t *pip_data)
         {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "写入帧失败\n");
             return SWITCH_STATUS_FALSE;
+        }
+    }
+
+    return SWITCH_STATUS_SUCCESS;
+}
+
+/* 刷新编码器缓冲区 */
+static switch_status_t flush_encoder(pip_session_data_t *pip_data)
+{
+    int ret;
+
+    if (!pip_data->output_codec_ctx || !pip_data->output_fmt_ctx || !pip_data->output_packet)
+    {
+        return SWITCH_STATUS_FALSE;
+    }
+
+    /* 发送NULL帧来刷新编码器 */
+    ret = avcodec_send_frame(pip_data->output_codec_ctx, NULL);
+    if (ret < 0)
+    {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "刷新编码器时发送NULL帧失败: %d\n", ret);
+        return SWITCH_STATUS_FALSE;
+    }
+
+    /* 接收所有剩余的包 */
+    while (1)
+    {
+        ret = avcodec_receive_packet(pip_data->output_codec_ctx, pip_data->output_packet);
+        if (ret == AVERROR_EOF || ret == AVERROR(EAGAIN))
+        {
+            break; // 没有更多帧了
+        }
+        else if (ret < 0)
+        {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "刷新编码器时接收包失败: %d\n", ret);
+            break;
+        }
+
+        /* 设置包时间戳 */
+        av_packet_rescale_ts(pip_data->output_packet, pip_data->output_codec_ctx->time_base,
+                             pip_data->output_stream->time_base);
+        pip_data->output_packet->stream_index = pip_data->output_stream->index;
+
+        /* 写入包到文件 */
+        ret = av_interleaved_write_frame(pip_data->output_fmt_ctx, pip_data->output_packet);
+        av_packet_unref(pip_data->output_packet);
+
+        if (ret < 0)
+        {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "刷新时写入帧失败: %d\n", ret);
         }
     }
 
@@ -410,10 +513,18 @@ static switch_status_t process_pip_overlay(pip_session_data_t *pip_data)
         return SWITCH_STATUS_FALSE;
     }
 
-    /* 从本地视频文件读取帧 */
-    if (read_local_video_frame(pip_data) != SWITCH_STATUS_SUCCESS)
+    /* 更新当前时间（基于远程视频帧率） */
+    pip_data->current_time = pip_data->remote_frames_count / pip_data->target_fps;
+
+    /* 检查是否需要读取新的本地视频帧 */
+    if (pip_data->current_time >= pip_data->last_local_time + pip_data->local_frame_time)
     {
-        return SWITCH_STATUS_FALSE;
+        /* 从本地视频文件读取帧 */
+        if (read_local_video_frame(pip_data) != SWITCH_STATUS_SUCCESS)
+        {
+            return SWITCH_STATUS_FALSE;
+        }
+        pip_data->last_local_time = pip_data->current_time;
     }
 
     /* 确保有远程视频帧 */
@@ -509,6 +620,7 @@ static switch_status_t convert_and_overlay_frames(pip_session_data_t *pip_data)
     if (pip_data->output_fmt_ctx)
     {
         write_output_frame(pip_data);
+        pip_data->frames_processed++; /* 增加处理帧数计数 */
     }
 
     return SWITCH_STATUS_SUCCESS;
@@ -539,6 +651,14 @@ static switch_status_t init_pip_context(pip_session_data_t *pip_data, const char
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "输出文件初始化失败，将跳过保存\n");
     }
 
+    /* 初始化PTS计数器 */
+    pip_data->output_pts = 0;
+
+    /* 初始化帧率同步 */
+    pip_data->target_fps = 30.0; /* 目标输出帧率 */
+    pip_data->current_time = 0.0;
+    pip_data->last_local_time = 0.0;
+
     /* 分配AVFrame */
     pip_data->frame_main = av_frame_alloc();
     pip_data->frame_pip = av_frame_alloc();
@@ -548,6 +668,15 @@ static switch_status_t init_pip_context(pip_session_data_t *pip_data, const char
     if (!pip_data->frame_main || !pip_data->frame_pip || !pip_data->frame_pip_scaled || !pip_data->frame_output)
     {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "分配AVFrame失败\n");
+        // 清理已分配的frame
+        if (pip_data->frame_main)
+            av_frame_free(&pip_data->frame_main);
+        if (pip_data->frame_pip)
+            av_frame_free(&pip_data->frame_pip);
+        if (pip_data->frame_pip_scaled)
+            av_frame_free(&pip_data->frame_pip_scaled);
+        if (pip_data->frame_output)
+            av_frame_free(&pip_data->frame_output);
         return SWITCH_STATUS_FALSE;
     }
 
@@ -762,29 +891,23 @@ static void cleanup_pip_session(pip_session_data_t *pip_data)
     }
 
     /* 清理输出视频文件资源 */
-    if (pip_data->output_codec_ctx)
+    if (pip_data->output_codec_ctx && pip_data->output_fmt_ctx)
     {
         /* 刷新编码器 */
-        // 让编码器处理所有剩余的帧
-        avcodec_send_frame(pip_data->output_codec_ctx, NULL);
-        // 用来接收剩余帧编码后的数据包
-        AVPacket *pkt = av_packet_alloc();
-        while (avcodec_receive_packet(pip_data->output_codec_ctx, pkt) >= 0)
-        {
-            av_packet_rescale_ts(pkt, pip_data->output_codec_ctx->time_base, pip_data->output_stream->time_base);
-            pkt->stream_index = pip_data->output_stream->index;
-            av_interleaved_write_frame(pip_data->output_fmt_ctx, pkt);
-            av_packet_unref(pkt);
-        }
-        av_packet_free(&pkt);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "开始刷新编码器...\n");
+        flush_encoder(pip_data);
 
         avcodec_close(pip_data->output_codec_ctx);
         avcodec_free_context(&pip_data->output_codec_ctx);
+        pip_data->output_codec_ctx = NULL;
     }
+
     if (pip_data->output_packet)
     {
         av_packet_free(&pip_data->output_packet);
+        pip_data->output_packet = NULL;
     }
+
     if (pip_data->output_fmt_ctx)
     {
         /* 写入文件尾 */
@@ -793,6 +916,7 @@ static void cleanup_pip_session(pip_session_data_t *pip_data)
         {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "写入视频文件尾失败: %d\n", ret);
         }
+
         if (!(pip_data->output_fmt_ctx->oformat->flags & AVFMT_NOFILE))
         {
             avio_closep(&pip_data->output_fmt_ctx->pb);
@@ -853,11 +977,17 @@ SWITCH_STANDARD_API(video_pip_start_function)
     pip_session_data_t *pip_data = NULL;
     char *uuid = NULL;
     char *local_video_file = NULL;
+    switch_memory_pool_t *pool = NULL;
+
+    /* 创建临时内存池 */
+    switch_core_new_memory_pool(&pool);
+
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "开始处理video_pip_start命令: %s\n", cmd ? cmd : "(null)");
 
     /* 解析参数 */
     if (!zstr(cmd))
     {
-        char *cmd_copy = strdup(cmd);
+        char *cmd_copy = switch_core_strdup(pool, cmd);
         char *argv[2];
         int argc = 0;
         // 用空格分割字符串为uuid 和文件路径
@@ -870,30 +1000,27 @@ SWITCH_STANDARD_API(video_pip_start_function)
 
         if (argc >= 1)
         {
-            uuid = strdup(argv[0]);
+            uuid = switch_core_strdup(pool, argv[0]);
         }
         if (argc >= 2)
         {
-            local_video_file = strdup(argv[1]);
+            local_video_file = switch_core_strdup(pool, argv[1]);
         }
-
-        free(cmd_copy);
     }
+
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "解析参数完成 - UUID: %s, 视频文件: %s\n",
+                      uuid ? uuid : "(auto)", local_video_file ? local_video_file : "(default)");
 
     /* 如果没有提供本地视频文件，使用默认路径 */
     if (!local_video_file)
     {
-        local_video_file = strdup("/home/white/桌面/freeswitch-video-pip-module/test_videos/pip_video.mp4");
-    }
-
-    /* 检查本地视频文件是否存在 */
+        local_video_file = switch_core_strdup(pool, "/home/white/桌面/freeswitch-video-pip-module/test_videos/dynamic_test_local.mp4");
+    } /* 检查本地视频文件是否存在 */
     if (access(local_video_file, R_OK) != 0)
     {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法访问本地视频文件: %s\n", local_video_file);
         stream->write_function(stream, "-ERR 无法访问本地视频文件: %s\n", local_video_file);
-        if (local_video_file)
-            free(local_video_file);
-        if (uuid)
-            free(uuid);
+        switch_core_destroy_memory_pool(&pool);
         return SWITCH_STATUS_SUCCESS;
     }
 
@@ -904,41 +1031,53 @@ SWITCH_STANDARD_API(video_pip_start_function)
         const void *key;
         void *val;
 
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "没有提供UUID，查找活跃会话\n");
+
         /* 查找第一个活跃的会话 */
         switch_mutex_lock(module_mutex);
         for (hi = switch_core_hash_first(session_pip_map); hi; hi = switch_core_hash_next(&hi))
         {
             switch_core_hash_this(hi, &key, NULL, &val);
-            uuid = strdup((const char *)key);
+            uuid = switch_core_strdup(pool, (const char *)key);
             break; /* 使用第一个找到的会话 */
         }
         switch_mutex_unlock(module_mutex);
 
         if (!uuid)
         {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "未找到活跃会话\n");
             stream->write_function(stream, "-ERR 需要会话UUID，没有找到活跃会话\n");
             stream->write_function(stream, "用法: video_pip_start [uuid] [local_video_file]\n");
-            if (local_video_file)
-                free(local_video_file);
+            switch_core_destroy_memory_pool(&pool);
             return SWITCH_STATUS_SUCCESS;
         }
     }
+
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "使用会话UUID: %s\n", uuid);
 
     /* 查找会话 */
     // 使用UUID查找会话,并且会上锁
     psession = switch_core_session_locate(uuid);
     if (!psession)
     {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "找不到会话: %s\n", uuid);
         stream->write_function(stream, "-ERR 找不到会话: %s\n", uuid);
-        if (local_video_file)
-            free(local_video_file);
-        if (uuid)
-            free(uuid);
+        switch_core_destroy_memory_pool(&pool);
         return SWITCH_STATUS_SUCCESS;
     }
 
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "成功找到会话，开始分配PIP数据结构\n");
+
     /* 分配PIP数据结构 */
     pip_data = switch_core_alloc(switch_core_session_get_pool(psession), sizeof(pip_session_data_t));
+    if (!pip_data)
+    {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "分配PIP数据结构失败\n");
+        switch_core_session_rwunlock(psession);
+        stream->write_function(stream, "-ERR 内存分配失败\n");
+        switch_core_destroy_memory_pool(&pool);
+        return SWITCH_STATUS_SUCCESS;
+    }
     memset(pip_data, 0, sizeof(pip_session_data_t));
 
     pip_data->session = psession;
@@ -954,49 +1093,67 @@ SWITCH_STANDARD_API(video_pip_start_function)
     pip_data->pip_opacity = DEFAULT_PIP_OPACITY;
     pip_data->active = SWITCH_TRUE;
 
-    switch_mutex_init(&pip_data->mutex, SWITCH_MUTEX_UNNESTED, switch_core_session_get_pool(psession));
-    switch_mutex_init(&pip_data->frame_mutex, SWITCH_MUTEX_UNNESTED, switch_core_session_get_pool(psession));
-
-    /* 初始化PIP上下文（包含本地视频文件） */
-    if (init_pip_context(pip_data, local_video_file) != SWITCH_STATUS_SUCCESS)
+    /* 初始化互斥锁 */
+    if (switch_mutex_init(&pip_data->mutex, SWITCH_MUTEX_UNNESTED, switch_core_session_get_pool(psession)) != SWITCH_STATUS_SUCCESS)
     {
-        cleanup_pip_session(pip_data);
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "初始化mutex失败\n");
         switch_core_session_rwunlock(psession);
-        stream->write_function(stream, "-ERR 初始化PIP上下文失败\n");
-        if (local_video_file)
-            free(local_video_file);
-        if (uuid)
-            free(uuid);
+        stream->write_function(stream, "-ERR 初始化互斥锁失败\n");
+        switch_core_destroy_memory_pool(&pool);
         return SWITCH_STATUS_SUCCESS;
     }
 
+    if (switch_mutex_init(&pip_data->frame_mutex, SWITCH_MUTEX_UNNESTED, switch_core_session_get_pool(psession)) != SWITCH_STATUS_SUCCESS)
+    {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "初始化frame_mutex失败\n");
+        switch_mutex_destroy(pip_data->mutex);
+        switch_core_session_rwunlock(psession);
+        stream->write_function(stream, "-ERR 初始化帧互斥锁失败\n");
+        switch_core_destroy_memory_pool(&pool);
+        return SWITCH_STATUS_SUCCESS;
+    }
+
+    /* 初始化PIP上下文（包含本地视频文件） */
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "开始初始化PIP上下文\n");
+    if (init_pip_context(pip_data, local_video_file) != SWITCH_STATUS_SUCCESS)
+    {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "初始化PIP上下文失败\n");
+        cleanup_pip_session(pip_data);
+        switch_core_session_rwunlock(psession);
+        stream->write_function(stream, "-ERR 初始化PIP上下文失败\n");
+        switch_core_destroy_memory_pool(&pool);
+        return SWITCH_STATUS_SUCCESS;
+    }
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "PIP上下文初始化成功\n");
+
     /* 创建媒体钩子来捕获远程视频 */
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "开始创建媒体钩子\n");
     // 第四个参数是一个回调函数指针，指向处理远程视频帧的函数
     if (switch_core_media_bug_add(psession, "video_pip_read", uuid, pip_read_video_callback, pip_data, 0,
                                   SMBF_READ_VIDEO_PING, &pip_data->read_bug) != SWITCH_STATUS_SUCCESS)
     {
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "创建媒体钩子失败\n");
         cleanup_pip_session(pip_data);
         switch_core_session_rwunlock(psession);
         stream->write_function(stream, "-ERR 创建媒体钩子失败\n");
-        if (local_video_file)
-            free(local_video_file);
-        if (uuid)
-            free(uuid);
+        switch_core_destroy_memory_pool(&pool);
         return SWITCH_STATUS_SUCCESS;
     }
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "媒体钩子创建成功\n");
 
     /* 存储到哈希表 */
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "存储会话到哈希表\n");
     switch_mutex_lock(module_mutex);
     switch_core_hash_insert(session_pip_map, uuid, pip_data);
     switch_mutex_unlock(module_mutex);
 
     switch_core_session_rwunlock(psession);
 
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "PIP启动完成\n");
     stream->write_function(stream, "+OK PIP启动成功 UUID=%s, 本地视频=%s\n", uuid, local_video_file);
-    if (local_video_file)
-        free(local_video_file);
-    if (uuid)
-        free(uuid);
+
+    /* 清理临时内存池 */
+    switch_core_destroy_memory_pool(&pool);
     return SWITCH_STATUS_SUCCESS;
 }
 
