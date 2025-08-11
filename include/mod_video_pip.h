@@ -1,8 +1,13 @@
 /*
- * FreeSWITCH Video Picture-in-Picture Module (简化版)
+ * FreeSWITCH Video Picture-in-Picture Module
  * 专注于视频捕获、缩放和叠加功能
- * 适配: FFmpeg 4.4 + FreeSWITCH 1.10.12 + MicroSIP
+ *
+ * 兼容版本:
+ *     FreeSWITCH 1.10.12 + MicroSIP
  */
+
+#ifndef MOD_VIDEO_PIP_H
+#define MOD_VIDEO_PIP_H
 
 #include <libavcodec/avcodec.h>
 #include <libavfilter/avfilter.h>
@@ -15,6 +20,7 @@
 #include <switch.h>
 #include <unistd.h> /* for access() */
 #include <string.h> /* for string functions */
+#include <math.h>   /* for fmod() */
 
 /* 模块声明 */
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_video_pip_shutdown);
@@ -108,7 +114,7 @@ static switch_status_t convert_and_overlay_frames(pip_session_data_t *pip_data);
 static switch_status_t init_pip_context(pip_session_data_t *pip_data, const char *local_video_file);
 static void overlay_yuv420p_frames(AVFrame *main_frame, AVFrame *pip_frame_scaled, AVFrame *output_frame, int x, int y,
                                    float opacity);
-static switch_status_t process_video_frame(pip_session_data_t *pip_data, switch_frame_t *main_frame,
-                                           switch_frame_t *pip_frame);
 static void cleanup_pip_session(pip_session_data_t *pip_data);
 static switch_bool_t pip_read_video_callback(switch_media_bug_t *bug, void *user_data, switch_abc_type_t type);
+
+#endif /* MOD_VIDEO_PIP_H */

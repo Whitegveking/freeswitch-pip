@@ -71,9 +71,7 @@ static switch_status_t read_local_video_frame(pip_session_data_t *pip_data)
 
     retry_count = 0;
     return SWITCH_STATUS_FALSE;
-}
-
-/* 初始化本地视频文件 */
+} /* 初始化本地视频文件 */
 static switch_status_t init_local_video_file(pip_session_data_t *pip_data, const char *video_file)
 {
     AVCodec *codec;
@@ -513,18 +511,30 @@ static switch_status_t process_pip_overlay(pip_session_data_t *pip_data)
         return SWITCH_STATUS_FALSE;
     }
 
-    /* 更新当前时间（基于远程视频帧率） */
-    pip_data->current_time = pip_data->remote_frames_count / pip_data->target_fps;
+    /* 简化的帧率同步策略：基于帧计数比例 */
 
-    /* 检查是否需要读取新的本地视频帧 */
-    if (pip_data->current_time >= pip_data->last_local_time + pip_data->local_frame_time)
+    /* 计算应该读取的本地视频帧数 */
+    uint64_t expected_local_frames = (pip_data->remote_frames_count * pip_data->local_fps) / pip_data->target_fps;
+
+    /* 如果本地帧数不足，读取更多帧 */
+    while (pip_data->local_frames_count < expected_local_frames)
     {
-        /* 从本地视频文件读取帧 */
         if (read_local_video_frame(pip_data) != SWITCH_STATUS_SUCCESS)
         {
-            return SWITCH_STATUS_FALSE;
+            /* 如果读取失败，可能到了文件末尾，停止处理 */
+            break;
         }
-        pip_data->last_local_time = pip_data->current_time;
+    }
+
+    /* 记录同步信息 */
+    if (pip_data->remote_frames_count % 300 == 0)
+    { /* 每10秒记录一次 */
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
+                          "帧率同步: 远程帧=%llu, 本地帧=%llu, 期望本地帧=%llu, 本地fps=%.2f, 目标fps=%.2f\n",
+                          (unsigned long long)pip_data->remote_frames_count,
+                          (unsigned long long)pip_data->local_frames_count,
+                          (unsigned long long)expected_local_frames,
+                          pip_data->local_fps, pip_data->target_fps);
     }
 
     /* 确保有远程视频帧 */
@@ -778,73 +788,73 @@ static void overlay_yuv420p_frames(AVFrame *main_frame, AVFrame *pip_frame_scale
 }
 
 /* 处理视频帧 */
-static switch_status_t process_video_frame(pip_session_data_t *pip_data, switch_frame_t *main_frame,
-                                           switch_frame_t *pip_frame)
-{
-    if (!pip_data || !main_frame || !pip_frame)
-    {
-        return SWITCH_STATUS_FALSE;
-    }
+// static switch_status_t process_video_frame(pip_session_data_t *pip_data, switch_frame_t *main_frame,
+//                                            switch_frame_t *pip_frame)
+// {
+//     if (!pip_data || !main_frame || !pip_frame)
+//     {
+//         return SWITCH_STATUS_FALSE;
+//     }
 
-    switch_mutex_lock(pip_data->mutex);
+//     switch_mutex_lock(pip_data->mutex);
 
-    if (!pip_data->active)
-    {
-        switch_mutex_unlock(pip_data->mutex);
-        return SWITCH_STATUS_FALSE;
-    }
+//     if (!pip_data->active)
+//     {
+//         switch_mutex_unlock(pip_data->mutex);
+//         return SWITCH_STATUS_FALSE;
+//     }
 
-    /* 设置主视频帧数据 */
-    if (av_image_fill_arrays(pip_data->frame_main->data, pip_data->frame_main->linesize, (uint8_t *)main_frame->data,
-                             AV_PIX_FMT_YUV420P, pip_data->main_width, pip_data->main_height, 1) < 0)
-    {
-        switch_mutex_unlock(pip_data->mutex);
-        return SWITCH_STATUS_FALSE;
-    }
-    pip_data->frame_main->width = pip_data->main_width;
-    pip_data->frame_main->height = pip_data->main_height;
-    pip_data->frame_main->format = AV_PIX_FMT_YUV420P;
+//     /* 设置主视频帧数据 */
+//     if (av_image_fill_arrays(pip_data->frame_main->data, pip_data->frame_main->linesize, (uint8_t *)main_frame->data,
+//                              AV_PIX_FMT_YUV420P, pip_data->main_width, pip_data->main_height, 1) < 0)
+//     {
+//         switch_mutex_unlock(pip_data->mutex);
+//         return SWITCH_STATUS_FALSE;
+//     }
+//     pip_data->frame_main->width = pip_data->main_width;
+//     pip_data->frame_main->height = pip_data->main_height;
+//     pip_data->frame_main->format = AV_PIX_FMT_YUV420P;
 
-    /* 设置PIP视频帧数据 */
-    if (av_image_fill_arrays(pip_data->frame_pip->data, pip_data->frame_pip->linesize, (uint8_t *)pip_frame->data,
-                             AV_PIX_FMT_YUV420P, pip_data->main_width, pip_data->main_height, 1) < 0)
-    {
-        switch_mutex_unlock(pip_data->mutex);
-        return SWITCH_STATUS_FALSE;
-    }
-    pip_data->frame_pip->width = pip_data->main_width;
-    pip_data->frame_pip->height = pip_data->main_height;
-    pip_data->frame_pip->format = AV_PIX_FMT_YUV420P;
+//     /* 设置PIP视频帧数据 */
+//     if (av_image_fill_arrays(pip_data->frame_pip->data, pip_data->frame_pip->linesize, (uint8_t *)pip_frame->data,
+//                              AV_PIX_FMT_YUV420P, pip_data->main_width, pip_data->main_height, 1) < 0)
+//     {
+//         switch_mutex_unlock(pip_data->mutex);
+//         return SWITCH_STATUS_FALSE;
+//     }
+//     pip_data->frame_pip->width = pip_data->main_width;
+//     pip_data->frame_pip->height = pip_data->main_height;
+//     pip_data->frame_pip->format = AV_PIX_FMT_YUV420P;
 
-    /* 缩放PIP视频 */
-    if (sws_scale(pip_data->sws_ctx_pip, (const uint8_t *const *)pip_data->frame_pip->data,
-                  pip_data->frame_pip->linesize, 0, pip_data->main_height, pip_data->frame_pip_scaled->data,
-                  pip_data->frame_pip_scaled->linesize) < 0)
-    {
-        switch_mutex_unlock(pip_data->mutex);
-        return SWITCH_STATUS_FALSE;
-    }
+//     /* 缩放PIP视频 */
+//     if (sws_scale(pip_data->sws_ctx_pip, (const uint8_t *const *)pip_data->frame_pip->data,
+//                   pip_data->frame_pip->linesize, 0, pip_data->main_height, pip_data->frame_pip_scaled->data,
+//                   pip_data->frame_pip_scaled->linesize) < 0)
+//     {
+//         switch_mutex_unlock(pip_data->mutex);
+//         return SWITCH_STATUS_FALSE;
+//     }
 
-    /* 叠加视频 */
-    overlay_yuv420p_frames(pip_data->frame_main, pip_data->frame_pip_scaled, pip_data->frame_output, pip_data->pip_x,
-                           pip_data->pip_y, pip_data->pip_opacity);
+//     /* 叠加视频 */
+//     overlay_yuv420p_frames(pip_data->frame_main, pip_data->frame_pip_scaled, pip_data->frame_output, pip_data->pip_x,
+//                            pip_data->pip_y, pip_data->pip_opacity);
 
-    /* 将处理后的数据拷贝回main_frame */
-    int frame_size = av_image_get_buffer_size(AV_PIX_FMT_YUV420P, pip_data->main_width, pip_data->main_height, 1);
+//     /* 将处理后的数据拷贝回main_frame */
+//     int frame_size = av_image_get_buffer_size(AV_PIX_FMT_YUV420P, pip_data->main_width, pip_data->main_height, 1);
 
-    if (frame_size > 0 && frame_size <= main_frame->buflen)
-    {
-        // (const uint8_t *const *)  常量指针+指针常量的组合，表示指向常量数据的指针的指针
-        av_image_copy_to_buffer((uint8_t *)main_frame->data, frame_size,
-                                (const uint8_t *const *)pip_data->frame_output->data, pip_data->frame_output->linesize,
-                                AV_PIX_FMT_YUV420P, pip_data->main_width, pip_data->main_height, 1);
-        main_frame->datalen = frame_size;
-        pip_data->frames_processed++;
-    }
+//     if (frame_size > 0 && frame_size <= main_frame->buflen)
+//     {
+//         // (const uint8_t *const *)  常量指针+指针常量的组合，表示指向常量数据的指针的指针
+//         av_image_copy_to_buffer((uint8_t *)main_frame->data, frame_size,
+//                                 (const uint8_t *const *)pip_data->frame_output->data, pip_data->frame_output->linesize,
+//                                 AV_PIX_FMT_YUV420P, pip_data->main_width, pip_data->main_height, 1);
+//         main_frame->datalen = frame_size;
+//         pip_data->frames_processed++;
+//     }
 
-    switch_mutex_unlock(pip_data->mutex);
-    return SWITCH_STATUS_SUCCESS;
-}
+//     switch_mutex_unlock(pip_data->mutex);
+//     return SWITCH_STATUS_SUCCESS;
+// }
 
 /* 清理PIP会话 */
 static void cleanup_pip_session(pip_session_data_t *pip_data)
