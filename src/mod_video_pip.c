@@ -724,60 +724,18 @@ static switch_status_t process_pip_overlay(pip_session_data_t *pip_data)
         return SWITCH_STATUS_FALSE;
     }
 
-    /* 检查是否使用图片模式 */
-    if (pip_data->use_image_mode)
+    /* 更新当前时间（基于远程视频帧率） */
+    pip_data->current_time = pip_data->remote_frames_count / pip_data->target_fps;
+
+    /* 检查是否需要读取新的本地视频帧 */
+    if (pip_data->current_time >= pip_data->last_local_time + pip_data->local_frame_time)
     {
-        /* 图片模式：使用固定的本地图片，不需要读取新帧 */
-        if (!pip_data->local_image_frame)
+        /* 从本地视频文件读取帧 */
+        if (read_local_video_frame(pip_data) != SWITCH_STATUS_SUCCESS)
         {
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "图片模式下本地图片帧为空\n");
             return SWITCH_STATUS_FALSE;
         }
-
-        /* 将图片帧复制到frame_main用于处理 */
-        if (!pip_data->frame_main)
-        {
-            pip_data->frame_main = av_frame_alloc();
-            if (!pip_data->frame_main)
-            {
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法分配主帧\n");
-                return SWITCH_STATUS_FALSE;
-            }
-        }
-
-        /* 复制图片帧数据到主帧 */
-        av_frame_unref(pip_data->frame_main);
-        if (av_frame_ref(pip_data->frame_main, pip_data->local_image_frame) < 0)
-        {
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法复制图片帧\n");
-            return SWITCH_STATUS_FALSE;
-        }
-    }
-    else
-    {
-        /* 视频模式：使用原有的帧率同步策略 */
-        uint64_t expected_local_frames = (pip_data->remote_frames_count * pip_data->local_fps) / pip_data->target_fps;
-
-        /* 如果本地帧数不足，读取更多帧 */
-        while (pip_data->local_frames_count < expected_local_frames)
-        {
-            if (read_local_video_frame(pip_data) != SWITCH_STATUS_SUCCESS)
-            {
-                /* 如果读取失败，可能到了文件末尾，停止处理 */
-                break;
-            }
-        }
-
-        /* 记录同步信息 */
-        if (pip_data->remote_frames_count % 300 == 0)
-        { /* 每10秒记录一次 */
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
-                              "帧率同步: 远程帧=%llu, 本地帧=%llu, 期望本地帧=%llu, 本地fps=%.2f, 目标fps=%.2f\n",
-                              (unsigned long long)pip_data->remote_frames_count,
-                              (unsigned long long)pip_data->local_frames_count,
-                              (unsigned long long)expected_local_frames,
-                              pip_data->local_fps, pip_data->target_fps);
-        }
+        pip_data->last_local_time = pip_data->current_time;
     }
 
     /* 确保有远程视频帧 */
