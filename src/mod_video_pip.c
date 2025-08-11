@@ -73,8 +73,8 @@ static switch_status_t read_local_video_frame(pip_session_data_t *pip_data)
     return SWITCH_STATUS_FALSE;
 }
 
-/* 加载本地图片文件 */
-static switch_status_t load_local_image(pip_session_data_t *pip_data, const char *image_file)
+/* 初始化本地图片文件 */
+static switch_status_t init_load_local_image(pip_session_data_t *pip_data, const char *image_file)
 {
     AVFormatContext *fmt_ctx = NULL;
     AVCodecContext *codec_ctx = NULL;
@@ -901,7 +901,7 @@ static switch_status_t init_pip_context(pip_session_data_t *pip_data, const char
             strcasecmp(file_ext, ".gif") == 0 || strcasecmp(file_ext, ".tiff") == 0)
         {
             /* 图片模式：加载静态图片 */
-            if (load_local_image(pip_data, local_video_file) != SWITCH_STATUS_SUCCESS)
+            if (init_load_local_image(pip_data, local_video_file) != SWITCH_STATUS_SUCCESS)
             {
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "加载本地图片失败: %s\n", local_video_file);
                 return SWITCH_STATUS_FALSE;
