@@ -1335,7 +1335,7 @@ SWITCH_STANDARD_API(video_pip_start_function)
 
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "没有提供UUID，查找活跃会话\n");
 
-        /* 查找最新的活跃会话（基于UUID字符串排序或最后访问时间） */
+        /* 首先尝试从已启动PIP的会话中查找 */
         switch_mutex_lock(module_mutex);
 
         const char *newest_uuid = NULL;
@@ -1392,16 +1392,96 @@ SWITCH_STANDARD_API(video_pip_start_function)
 
         switch_mutex_unlock(module_mutex);
 
+        /* 如果PIP会话中没有找到，则查找系统中所有活跃会话 */
+        switch_mutex_lock(module_mutex);
+        if (!uuid)
+        {
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "PIP会话中未找到，查找系统活跃会话\n");
+
+            /* 使用FreeSWITCH API查找活跃会话 */
+            switch_stream_handle_t stream_handle = {0};
+            SWITCH_STANDARD_STREAM(stream_handle);
+
+            /* 执行 "show calls" 命令获取活跃会话列表 */
+            if (switch_api_execute("show", "calls", NULL, &stream_handle) == SWITCH_STATUS_SUCCESS)
+            {
+                char *output = (char *)stream_handle.data;
+                if (output && strlen(output) > 0)
+                {
+                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "show calls输出: %s\n", output);
+
+                    /* 解析输出，查找UUID */
+                    char *line = strtok(output, "\n");
+                    while (line)
+                    {
+                        /* 查找包含UUID的行（通常格式为UUID,direction,created,name,state,cid_name,cid_num,ip_addr,dest,application,application_data,dialplan,context） */
+                        if (strlen(line) > 36 && strstr(line, "-") != NULL)
+                        {
+                            /* 提取UUID（前36个字符） */
+                            char temp_uuid[64];
+                            strncpy(temp_uuid, line, 36);
+                            temp_uuid[36] = '\0';
+
+                            /* 验证这是一个有效的UUID格式 */
+                            if (strstr(temp_uuid, "-") != NULL)
+                            {
+                                /* 尝试定位这个会话以验证其有效性 */
+                                switch_core_session_t *test_session = switch_core_session_locate(temp_uuid);
+                                if (test_session)
+                                {
+                                    switch_channel_t *test_channel = switch_core_session_get_channel(test_session);
+                                    switch_channel_state_t state = switch_channel_get_state(test_channel);
+
+                                    /* 检查会话是否处于活跃状态 */
+                                    if (state >= CS_ROUTING && state < CS_HANGUP)
+                                    {
+                                        uuid = switch_core_strdup(pool, temp_uuid);
+                                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
+                                                          "从活跃会话中找到有效会话: %s (状态: %d)\n", uuid, state);
+                                        switch_core_session_rwunlock(test_session);
+                                        break;
+                                    }
+                                    else
+                                    {
+                                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
+                                                          "会话 %s 状态不活跃: %d\n", temp_uuid, state);
+                                    }
+                                    switch_core_session_rwunlock(test_session);
+                                }
+                                else
+                                {
+                                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
+                                                      "无法定位会话: %s\n", temp_uuid);
+                                }
+                            }
+                        }
+                        line = strtok(NULL, "\n");
+                    }
+                }
+                else
+                {
+                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "show calls 没有返回数据\n");
+                }
+            }
+            else
+            {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "执行 show calls 命令失败\n");
+            }
+
+            switch_safe_free(stream_handle.data);
+        }
+        switch_mutex_unlock(module_mutex);
+
         if (!uuid)
         {
             switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "未找到活跃会话\n");
             stream->write_function(stream, "-ERR 需要会话UUID，没有找到活跃会话\n");
             stream->write_function(stream, "用法: video_pip_start [uuid] [local_video_file]\n");
+            stream->write_function(stream, "提示: 请先建立视频通话，然后再启动PIP功能\n");
             switch_core_destroy_memory_pool(&pool);
             return SWITCH_STATUS_SUCCESS;
         }
     }
-
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "使用会话UUID: %s\n", uuid);
 
     /* 查找会话 */

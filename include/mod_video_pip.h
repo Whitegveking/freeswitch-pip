@@ -97,6 +97,7 @@ typedef struct pip_session_data
 } pip_session_data_t;
 
 /* 全局变量 */
+// 全局内存池、互斥锁和会话哈希表
 static switch_memory_pool_t *module_pool = NULL;
 static switch_mutex_t *module_mutex = NULL;
 static switch_hash_t *session_pip_map = NULL;
