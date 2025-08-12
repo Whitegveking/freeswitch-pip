@@ -1335,62 +1335,62 @@ SWITCH_STANDARD_API(video_pip_start_function)
 
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "没有提供UUID，查找活跃会话\n");
 
-        /* 首先尝试从已启动PIP的会话中查找 */
-        switch_mutex_lock(module_mutex);
+        // /* 首先尝试从已启动PIP的会话中查找 */
+        // switch_mutex_lock(module_mutex);
 
-        const char *newest_uuid = NULL;
-        switch_time_t newest_answered_time = 0;
+        // const char *newest_uuid = NULL;
+        // switch_time_t newest_answered_time = 0;
 
-        for (hi = switch_core_hash_first(session_pip_map); hi; hi = switch_core_hash_next(&hi))
-        {
-            switch_core_hash_this(hi, &key, NULL, &val);
-            const char *session_uuid = (const char *)key;
+        // for (hi = switch_core_hash_first(session_pip_map); hi; hi = switch_core_hash_next(&hi))
+        // {
+        //     switch_core_hash_this(hi, &key, NULL, &val);
+        //     const char *session_uuid = (const char *)key;
 
-            /* 根据UUID查找会话并检查其状态 */
-            switch_core_session_t *session = switch_core_session_locate(session_uuid);
-            if (session)
-            {
-                switch_channel_t *channel = switch_core_session_get_channel(session);
+        //     /* 根据UUID查找会话并检查其状态 */
+        //     switch_core_session_t *session = switch_core_session_locate(session_uuid);
+        //     if (session)
+        //     {
+        //         switch_channel_t *channel = switch_core_session_get_channel(session);
 
-                /* 获取会话的应答时间或创建时间 */
-                const char *answered_epoch_str = switch_channel_get_variable(channel, "answered_epoch");
-                const char *created_epoch_str = switch_channel_get_variable(channel, "created_epoch");
+        //         /* 获取会话的应答时间或创建时间 */
+        //         const char *answered_epoch_str = switch_channel_get_variable(channel, "answered_epoch");
+        //         const char *created_epoch_str = switch_channel_get_variable(channel, "created_epoch");
 
-                switch_time_t session_time = 0;
+        //         switch_time_t session_time = 0;
 
-                if (answered_epoch_str)
-                {
-                    session_time = atoll(answered_epoch_str);
-                }
-                else if (created_epoch_str)
-                {
-                    session_time = atoll(created_epoch_str);
-                }
-                else
-                {
-                    /* 如果都没有，使用当前时间作为备选 */
-                    session_time = switch_time_now() / 1000000; /* 转换为秒 */
-                }
+        //         if (answered_epoch_str)
+        //         {
+        //             session_time = atoll(answered_epoch_str);
+        //         }
+        //         else if (created_epoch_str)
+        //         {
+        //             session_time = atoll(created_epoch_str);
+        //         }
+        //         else
+        //         {
+        //             /* 如果都没有，使用当前时间作为备选 */
+        //             session_time = switch_time_now() / 1000000; /* 转换为秒 */
+        //         }
 
-                /* 选择时间最新（最大）的会话 */
-                if (session_time > newest_answered_time || newest_uuid == NULL)
-                {
-                    newest_answered_time = session_time;
-                    newest_uuid = session_uuid;
-                }
+        //         /* 选择时间最新（最大）的会话 */
+        //         if (session_time > newest_answered_time || newest_uuid == NULL)
+        //         {
+        //             newest_answered_time = session_time;
+        //             newest_uuid = session_uuid;
+        //         }
 
-                switch_core_session_rwunlock(session);
-            }
-        }
+        //         switch_core_session_rwunlock(session);
+        //     }
+        // }
 
-        if (newest_uuid)
-        {
-            uuid = switch_core_strdup(pool, newest_uuid);
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "找到最新会话: %s (时间: %lld)\n",
-                              uuid, (long long)newest_answered_time);
-        }
+        // if (newest_uuid)
+        // {
+        //     uuid = switch_core_strdup(pool, newest_uuid);
+        //     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "找到最新会话: %s (时间: %lld)\n",
+        //                       uuid, (long long)newest_answered_time);
+        // }
 
-        switch_mutex_unlock(module_mutex);
+        // switch_mutex_unlock(module_mutex);
 
         /* 如果PIP会话中没有找到，则查找系统中所有活跃会话 */
         switch_mutex_lock(module_mutex);
