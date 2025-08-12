@@ -1282,8 +1282,10 @@ SWITCH_STANDARD_API(video_pip_start_function)
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "开始处理video_pip_start命令: %s\n", cmd ? cmd : "(null)");
 
     /* 解析参数 */
+    // 有命令参数时，解析UUID和本地视频文件路径
     if (!zstr(cmd))
     {
+        // 用freeswitch的内存池复制命令字符串
         char *cmd_copy = switch_core_strdup(pool, cmd);
         char *argv[2];
         int argc = 0;
@@ -1312,13 +1314,16 @@ SWITCH_STANDARD_API(video_pip_start_function)
     if (!local_video_file)
     {
         local_video_file = switch_core_strdup(pool, "/home/white/桌面/freeswitch-video-pip-module/test_pictures/test.jpg");
-    } /* 检查本地视频文件是否存在 */
+    }
+
+    /* 检查本地视频文件是否存在 */
     if (access(local_video_file, R_OK) != 0)
     {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "无法访问本地视频文件: %s\n", local_video_file);
         stream->write_function(stream, "-ERR 无法访问本地视频文件: %s\n", local_video_file);
-        switch_core_destroy_memory_pool(&pool);
-        return SWITCH_STATUS_SUCCESS;
+        // 使用默认本地文件
+        local_video_file = switch_core_strdup(pool, "/home/white/桌面/freeswitch-video-pip-module/test_pictures/test.jpg");
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "使用默认本地文件: %s\n", local_video_file);
     }
 
     /* 如果没有提供UUID，尝试查找当前活跃的会话 */
@@ -1330,14 +1335,61 @@ SWITCH_STANDARD_API(video_pip_start_function)
 
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "没有提供UUID，查找活跃会话\n");
 
-        /* 查找第一个活跃的会话 */
+        /* 查找最新的活跃会话（基于UUID字符串排序或最后访问时间） */
         switch_mutex_lock(module_mutex);
+
+        const char *newest_uuid = NULL;
+        switch_time_t newest_answered_time = 0;
+
         for (hi = switch_core_hash_first(session_pip_map); hi; hi = switch_core_hash_next(&hi))
         {
             switch_core_hash_this(hi, &key, NULL, &val);
-            uuid = switch_core_strdup(pool, (const char *)key);
-            break; /* 使用第一个找到的会话 */
+            const char *session_uuid = (const char *)key;
+
+            /* 根据UUID查找会话并检查其状态 */
+            switch_core_session_t *session = switch_core_session_locate(session_uuid);
+            if (session)
+            {
+                switch_channel_t *channel = switch_core_session_get_channel(session);
+
+                /* 获取会话的应答时间或创建时间 */
+                const char *answered_epoch_str = switch_channel_get_variable(channel, "answered_epoch");
+                const char *created_epoch_str = switch_channel_get_variable(channel, "created_epoch");
+
+                switch_time_t session_time = 0;
+
+                if (answered_epoch_str)
+                {
+                    session_time = atoll(answered_epoch_str);
+                }
+                else if (created_epoch_str)
+                {
+                    session_time = atoll(created_epoch_str);
+                }
+                else
+                {
+                    /* 如果都没有，使用当前时间作为备选 */
+                    session_time = switch_time_now() / 1000000; /* 转换为秒 */
+                }
+
+                /* 选择时间最新（最大）的会话 */
+                if (session_time > newest_answered_time || newest_uuid == NULL)
+                {
+                    newest_answered_time = session_time;
+                    newest_uuid = session_uuid;
+                }
+
+                switch_core_session_rwunlock(session);
+            }
         }
+
+        if (newest_uuid)
+        {
+            uuid = switch_core_strdup(pool, newest_uuid);
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "找到最新会话: %s (时间: %lld)\n",
+                              uuid, (long long)newest_answered_time);
+        }
+
         switch_mutex_unlock(module_mutex);
 
         if (!uuid)
